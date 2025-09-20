@@ -1,0 +1,91 @@
+
+# Diccionario de mapeo
+mapeo_procedencia = {
+    "HumanObservation": "Observacion humana",
+    "PreservedSpecimen": "Especimen preservado",
+    "MachineObservation": "Observacion de maquina",
+    "LivingSpecimen": "Especimen vivo",
+    "FossilSpecimen": "Especimen fosil",     
+    "Occurrence": "Evidencia",
+    "Materialsample": "muestra registrada",
+    "MaterialCitation": "Material citado"
+}
+
+# Crear DataFrame de mapeo (no lazy)
+mapeo_df = pl.DataFrame({
+    "procedenciaejemplar": list(mapeo_procedencia.keys()),
+    "procedenciaejemplar_es": list(mapeo_procedencia.values())
+})
+
+# Filtrar datos (no lazy)
+ejemplares_df = snib_lazy_df.select(pl.col(["grupobio", "procedenciaejemplar"])).collect()
+ejemplares_df = ejemplares_df.filter(
+    (pl.col("grupobio").is_not_null()) & 
+    (pl.col("procedenciaejemplar").is_not_null()) & 
+    (pl.col("grupobio").str.strip_chars() != "") & 
+    (pl.col("procedenciaejemplar").str.strip_chars() != "")
+)
+
+# Hacer join para mapear al español (no lazy)
+ejemplares_mapeados = ejemplares_df.join(
+    mapeo_df,
+    on="procedenciaejemplar",
+    how="left"
+).with_columns(
+    pl.when(pl.col("procedenciaejemplar_es").is_not_null())
+      .then(pl.col("procedenciaejemplar_es"))
+      .otherwise(pl.col("procedenciaejemplar"))
+      .alias("procedenciaejemplar_mapeado")
+)
+
+# Agrupar y contar
+conteo_df = ejemplares_mapeados.group_by(["grupobio", "procedenciaejemplar_mapeado"]).agg(
+    pl.len().alias("conteo")
+)
+
+# Calcular totales por grupo y ordenarlos en forma descendente
+totales_por_grupo = conteo_df.group_by("grupobio").agg(
+    pl.col("conteo").sum().alias("total")
+).sort("total", descending=True)
+
+# Lista de grupos ordenados (Aves saldrá primero si es el mayor)
+grupos = totales_por_grupo.select("grupobio").to_series().to_list()
+
+
+
+
+#grupos = conteo_df.select("grupobio").unique().to_series().to_list()
+procedencias = conteo_df.select("procedenciaejemplar_mapeado").unique().to_series().to_list()
+
+# Construir diccionario para acceso rápido
+data = {}
+for row in conteo_df.iter_rows():
+    grupo, procedencia, conteo = row
+    data.setdefault(grupo, {})[procedencia] = conteo
+
+# Preparar datos para plotly
+# Para cada procedencia, crear una lista de conteos por grupo (en orden)
+trazas = []
+for procedencia in procedencias:
+    y_vals = [data.get(grupo, {}).get(procedencia, 0) for grupo in grupos]
+    traza = go.Bar(
+        name=procedencia,
+        x=grupos,
+        y=y_vals
+    )
+    trazas.append(traza)
+
+# Crear figura con barras apiladas
+fig = go.Figure(data=trazas)
+fig.update_layout(
+    barmode='stack',
+    title="Cantidad de Ejemplares por Grupo Biológico y Procedencia",
+    xaxis_title="Grupo Biológico",
+    yaxis_title="Cantidad de Ejemplares",
+    legend_title="Procedencia del Ejemplar",
+    xaxis_tickangle=-45,
+    margin=dict(t=50, b=150),
+
+   
+
+fig.show()
